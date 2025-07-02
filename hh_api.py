@@ -1,130 +1,138 @@
-# hh_api.py
-import urllib.parse
+import os
 import httpx
+from typing import Any, Dict, List
 
 
 class HHClient:
-    # ── константы ───────────────────────────────────────────────────────
-    BASE       = "https://api.hh.ru"
-    AUTH_URL   = "https://hh.ru/oauth/authorize"   # всегда hh.ru
-    TOKEN_URL  = "https://hh.ru/oauth/token"
-    UA         = "AutoReplyBot/1.0 (valshikegor173@gmail.com)"  # ← ваш e-mail
+    # Константы API
+    BASE_URL = "https://api.hh.ru"
+    AUTH_URL = "https://hh.ru/oauth/authorize"  # всегда hh.ru
+    TOKEN_URL = "https://hh.ru/oauth/token"
 
     def __init__(self, client_id: str, client_secret: str, redirect_uri: str):
-        self.client_id     = client_id
+        """
+        Инициализация клиента.
+        """
+        self.client_id = client_id
         self.client_secret = client_secret
-        self.redirect_uri  = redirect_uri
+        self.redirect_uri = redirect_uri
+        ua = os.getenv("HH_UA", "AutoReplyBot/1.0 (contact@example.com)")
+        self.client = httpx.AsyncClient(timeout=10, headers={"User-Agent": ua})
 
-    # ────────────────────────────────────────────────────────────────────
-    #  OAuth
-    # ────────────────────────────────────────────────────────────────────
-    async def exchange_code(self, code: str) -> dict:
+    async def exchange_code_for_token(self, code: str) -> Dict[str, Any]:
         """
-        Обмен «code → access / refresh».  HH иногда требует непустых UA-заголовков,
-        иначе возвращает 403 (DDoS-Guard). Добавляем сразу оба.
+        Обменивает authorization code на пару токенов.
         """
-        payload = urllib.parse.urlencode({
-            "grant_type":    "authorization_code",
-            "code":          code,
-            "client_id":     self.client_id,
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": self.client_id,
             "client_secret": self.client_secret,
-            "redirect_uri":  self.redirect_uri,
-        })
-
-        headers = {
-            "User-Agent":     self.UA,          # обычный UA
-            "HH-User-Agent":  self.UA,          # HH-специфический
-            "Accept":         "application/json",
-            "Content-Type":   "application/x-www-form-urlencoded",
+            "code": code,
+            "redirect_uri": self.redirect_uri,
         }
+        resp = await self.client.post(self.TOKEN_URL, data=data)
+        if resp.status_code != 200:
+            # Логируем код и тело ответа
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error("HH OAuth error %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json()
 
-        async with httpx.AsyncClient() as c:
-            r = await c.post(self.TOKEN_URL, content=payload,
-                             headers=headers, timeout=10)
-
-        # ↓ добавь временный лог
-        if r.status_code != 200:
-            print('HH body:', r.text)  # <— покажет точное описание ошибки
-
-        r.raise_for_status()
-        return r.json()
-
-    def get_authorize_url(self) -> str:
-        """
-        Ссылка, куда отправляем пользователя.
-        """
-        params = {
-            "response_type": "code",
-            "client_id":     self.client_id,
-            "redirect_uri":  self.redirect_uri,
-        }
-        return f"{self.AUTH_URL}?{urllib.parse.urlencode(params)}"
-
-    # ────────────────────────────────────────────────────────────────────
-    #  Работа с вакансиями / резюме / откликами
-    # ────────────────────────────────────────────────────────────────────
-    async def _auth_headers(self, token: str) -> dict:
-        return {
-            "Authorization": f"Bearer {token}",
-            "User-Agent":    self.UA,
-            "HH-User-Agent": self.UA,
-            "Accept":        "application/json",
-        }
+    async def _auth_headers(self, access_token: str) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {access_token}"}
 
     async def search_vacancies(
         self,
         access_token: str,
-        page: int = 0,
-        per_page: int = 10,
-        **filters
-    ) -> list[dict]:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.BASE}/vacancies",
-                headers=await self._auth_headers(access_token),
-                params={"page": page, "per_page": per_page, **filters},
-                timeout=10,
-            )
-            r.raise_for_status()
-            return r.json().get("items", [])
+        text: str,
+        per_page: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Поиск вакансий по тексту.
+        """
+        params = {"text": text, "per_page": per_page}
+        resp = await self.client.get(
+            f"{self.BASE_URL}/vacancies",
+            params=params,
+            headers=await self._auth_headers(access_token),
+        )
+        resp.raise_for_status()
+        return resp.json().get("items", [])
+
+    async def list_resumes(self, access_token: str) -> List[Dict[str, Any]]:
+        """
+        Получение списка резюме пользователя.
+        """
+        resp = await self.client.get(
+            f"{self.BASE_URL}/resumes/mine",
+            headers=await self._auth_headers(access_token),
+        )
+        resp.raise_for_status()
+        return resp.json().get("items", [])
+
+    async def get_vacancy(
+        self,
+        vacancy_id: str,
+        access_token: str
+    ) -> Dict[str, Any]:
+        """
+        Получение детальной информации о вакансии по ID.
+        """
+        resp = await self.client.get(
+            f"{self.BASE_URL}/vacancies/{vacancy_id}",
+            headers=await self._auth_headers(access_token),
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     async def respond_to_vacancy(
         self,
         access_token: str,
-        resume_id: str,
         vacancy_id: str,
-        message: str,
-    ) -> int:
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self.BASE}/negotiations",
-                headers=await self._auth_headers(access_token),
-                data={
-                    "vacancy_id": vacancy_id,
-                    "resume_id":  resume_id,
-                    "message":    message,
-                },
-                timeout=10,
-            )
-            r.raise_for_status()
-            return r.status_code        # 201 — ok
+        resume_id: str,
+        cover_letter: str
+    ) -> Dict[str, Any]:
+        """
+        Отправка отклика на вакансию (создание переговоров).
+        """
+        payload = {
+            "vacancy_id": vacancy_id,
+            "resume_id": resume_id,
+            "cover_letter": cover_letter,
+        }
+        resp = await self.client.post(
+            f"{self.BASE_URL}/negotiations",
+            json=payload,
+            headers=await self._auth_headers(access_token),
+        )
+        resp.raise_for_status()
+        return resp.json()
 
-    async def get_my_resumes(self, access_token: str) -> list[dict]:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.BASE}/resumes/mine",
-                headers=await self._auth_headers(access_token),
-                timeout=10,
-            )
-            r.raise_for_status()
-            return r.json().get("items", [])
+    async def close(self):
+        """
+        Закрывает HTTP-сессию.
+        """
+        await self.client.aclose()
 
-    async def get_vacancy(self, vacancy_id: str, access_token: str) -> dict:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self.BASE}/vacancies/{vacancy_id}",
-                headers=await self._auth_headers(access_token),
-                timeout=10,
-            )
-            r.raise_for_status()
-            return r.json()
+
+class AreaSuggestion:
+    def __init__(self, name: str, id: str):
+        # текстовое название региона и его внутренний идентификатор
+        self.name = name
+        self.id = id
+
+async def get_area_suggestions(query: str) -> List[AreaSuggestion]:
+    """
+    Делает запрос к HH API /suggests/areas?text=<query>
+    и возвращает список похожих локаций.
+    """
+    url = "https://api.hh.ru/suggests/areas"
+    params = {"text": query}
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, params=params, timeout=5.0)
+        resp.raise_for_status()
+        data = resp.json()
+    items = data.get("items", [])
+    # из каждого элемента берём 'text' (имя) и 'id'
+    return [AreaSuggestion(item["text"], item["id"]) for item in items]

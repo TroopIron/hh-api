@@ -1,113 +1,79 @@
 import aiosqlite
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from typing import Optional
 
+# Путь к SQLite базе
 DB_PATH = "tg_users.db"
 
-# ---------------------------------------------------------------------------
-async def set_user_setting(tg_user: int, key: str, value: str | None):
+# Путь к SQLite базе\ DB_PATH = "tg_users.db"
+
+async def set_pending(tg_user: int, field: Optional[str]):
+    """
+    Помечаем, что для пользователя tg_user сейчас ожидается ввод для поля field.
+    Для сброса передайте field=None.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        if value is None:
-            await db.execute(
-                "DELETE FROM user_settings WHERE tg_user=? AND key=?",
-                (tg_user, key)
-            )
-        else:
-            await db.execute("""
-                INSERT INTO user_settings(tg_user, key, value)
-                VALUES(?,?,?)
-                ON CONFLICT(tg_user, key)
-                DO UPDATE SET value=excluded.value
-            """, (tg_user, key, value))
+        await db.execute(
+            "INSERT OR REPLACE INTO user_settings (tg_user, key, value) VALUES (?, ?, ?)",
+            (tg_user, "pending", field)
+        )
         await db.commit()
 
-async def get_user_setting(tg_user: int, key: str) -> str | None:
+async def get_pending(tg_user: int) -> Optional[str]:
+    """
+    Возвращает текущее pending-поле для пользователя или None, если ожидание не установлено.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT value FROM user_settings WHERE tg_user=? AND key=?",
-            (tg_user, key)
+        async with db.execute(
+            "SELECT value FROM user_settings WHERE tg_user = ? AND key = 'pending'",
+            (tg_user,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+async def save_user_setting(tg_user: int, key: str, value: str):
+    """
+    Сохраняет любое пользовательское значение (фильтр) по ключу key.
+    Пример key: 'region', 'salary', 'work_format', 'employment_type', 'keyword', 'prompt'.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO user_settings (tg_user, key, value) VALUES (?, ?, ?)",
+            (tg_user, key, value)
         )
-        row = await cursor.fetchone()
-    return row[0] if row else None
+        await db.commit()
 
-# ------ «pending» -----------------------------------------------------------
-async def set_pending(tg_user: int, field: str | None):
-    await set_user_setting(tg_user, "pending", field)
+async def get_user_setting(tg_user: int, key: str) -> Optional[str]:
+    """
+    Получает сохранённое значение пользователя по ключу key.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT value FROM user_settings WHERE tg_user = ? AND key = ?",
+            (tg_user, key)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
 
-async def get_pending(tg_user: int) -> str | None:
-    return await get_user_setting(tg_user, "pending")
 
-# ------ клавиатура (оставьте как было) --------------------------------------
-def build_settings_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "📑 Фильтры", "callback_data": "open:filters"}],
-            [{"text": "⬅️ Назад",   "callback_data": "back:main"}]
-        ]
-    }
-
-# ------ справочник полей ----------------------------------------------------
-FIELD_INFO = {
-    "salary_min": {
-        "title": "Минимальная зарплата",
-        "hint": (
-            "Укажите сумму в рублях. "
-            "Вакансии с указанной зарплатой ниже этого порога бот будет пропускать.\n"
-            "Пример: 70000"
-        ),
-        "validator": str.isdigit
-    },
-}
-
-# --- ↓ добавьте / замените в конце файла ------------------------------------
-
-FILTER_KEYBOARD = {
-    "inline_keyboard": [
-        [{"text": "💰 Зарплата",        "callback_data": "set:salary_min"}],
-        [{"text": "🌍 Регион",          "callback_data": "set:region"}],
-        [{"text": "🔎 Ключевое слово",  "callback_data": "set:keyword"}],
-        [{"text": "📋 Тип занятости",   "callback_data": "sub:employment"}],
-        [{"text": "🕒 График работы",   "callback_data": "sub:schedule"}],
-        [{"text": "⬅️ Назад",           "callback_data": "back:settings"}]
+def build_settings_keyboard() -> InlineKeyboardMarkup:
+    """
+    Строит клавиатуру фильтров для настроек. Кнопки в два ряда:
+    Регион, График, Формат работы, ЗП, Тип занятости, Ключевое слово
+    """
+    # Группируем кнопки по по два в ряд
+    keyboard = [
+        [
+            InlineKeyboardButton(text="Регион", callback_data="filter_region"),
+            InlineKeyboardButton(text="График", callback_data="filter_schedule"),
+        ],
+        [
+            InlineKeyboardButton(text="Формат работы", callback_data="filter_work_format"),
+            InlineKeyboardButton(text="ЗП", callback_data="filter_salary"),
+        ],
+        [
+            InlineKeyboardButton(text="Тип занятости", callback_data="filter_employment_type"),
+            InlineKeyboardButton(text="Ключевое слово", callback_data="filter_keyword"),
+        ],
     ]
-}
-
-EMPLOYMENT_VALUES = [
-    ("Полная",   "full"),
-    ("Частичная","part"),
-    ("Проект",   "project"),
-    ("Стажировка","probation"),
-]
-
-SCHEDULE_VALUES = [
-    ("Офис",     "fullDay"),
-    ("Удалёнка", "remote"),
-    ("Смены",    "shift"),
-    ("Гибкий",   "flexible"),
-]
-
-def build_multiselect_kb(prefix: str, options: list[tuple[str, str]], chosen: set[str]):
-    rows = []
-    for title, code in options:
-        mark = "✅ " if code in chosen else ""
-        rows.append([{
-            "text": f"{mark}{title}",
-            "callback_data": f"toggle:{prefix}:{code}"
-        }])
-    rows.append([{"text": "⬅️ Назад", "callback_data": "back:filters"}])
-    return {"inline_keyboard": rows}
-
-# --- дополняем FIELD_INFO ----------------------------------------------------
-FIELD_INFO.update({
-    "region": {
-        "title": "Регион поиска",
-        "hint":  "Введите город или область (часть названия). "
-                 "Я покажу 5 ближайших совпадений для подтверждения.",
-        "validator": lambda x: len(x) >= 2
-    },
-    "keyword": {
-        "title": "Ключевое слово",
-        "hint":  ("Введите ключевое слово. HH ищет по вхождению, "
-                  "поэтому «маркетолог» подхватит и Digital-маркетолог, "
-                  "и Директор по маркетингу."),
-        "validator": lambda x: len(x) >= 3
-    },
-})
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
