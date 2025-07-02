@@ -134,8 +134,8 @@ async def telegram_webhook(request: Request, token: str):
             await save_user_setting(user_id, "region", area_id)
             await set_pending(user_id, None)
 
-            await call.answer()
-            await call.message.edit_reply_markup()
+            await bot(call.answer())
+            await bot(call.message.edit_reply_markup())
 
             await bot.send_message(user_id, "✅ Регион установлен!")
             await bot.send_message(
@@ -147,8 +147,8 @@ async def telegram_webhook(request: Request, token: str):
             await save_user_setting(user_id, "schedule", value)
             await set_pending(user_id, None)
 
-            await call.answer()
-            await call.message.edit_reply_markup()
+            await bot(call.answer())
+            await bot(call.message.edit_reply_markup())
 
             await bot.send_message(user_id, "✅ График работы установлен!")
             await bot.send_message(
@@ -160,8 +160,8 @@ async def telegram_webhook(request: Request, token: str):
             await save_user_setting(user_id, "work_format", value)
             await set_pending(user_id, None)
 
-            await call.answer()
-            await call.message.edit_reply_markup()
+            await bot(call.answer())
+            await bot(call.message.edit_reply_markup())
 
             await bot.send_message(user_id, "✅ Формат работы установлен!")
             await bot.send_message(
@@ -173,8 +173,8 @@ async def telegram_webhook(request: Request, token: str):
             await save_user_setting(user_id, "salary", value)
             await set_pending(user_id, None)
 
-            await call.answer()
-            await call.message.edit_reply_markup()
+            await bot(call.answer())
+            await bot(call.message.edit_reply_markup())
 
             await bot.send_message(user_id, "✅ Зарплата установлена!")
             await bot.send_message(
@@ -186,8 +186,8 @@ async def telegram_webhook(request: Request, token: str):
             await save_user_setting(user_id, "employment_type", value)
             await set_pending(user_id, None)
 
-            await call.answer()
-            await call.message.edit_reply_markup()
+            await bot(call.answer())
+            await bot(call.message.edit_reply_markup())
 
             await bot.send_message(user_id, "✅ Тип занятости установлен!")
             await bot.send_message(
@@ -200,7 +200,7 @@ async def telegram_webhook(request: Request, token: str):
             await save_user_setting(user_id, "resume", resume_id)
             await bot.send_message(user_id, "Резюме сохранено 👍")
 
-        await call.answer()
+        await bot(call.answer())
         return {"ok": True}
 
     # ────────── Текстовые сообщения ──────────
