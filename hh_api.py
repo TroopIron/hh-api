@@ -138,16 +138,21 @@ async def get_area_suggestions(query: str) -> List[AreaSuggestion]:
     return [AreaSuggestion(item["text"], item["id"]) for item in items]
 
 
-async def area_name(area_id: int | str | None) -> str:
-    """Возвращает название региона по его id с graceful fallback."""
+# общий клиент HH API для простых запросов
+client = httpx.AsyncClient(base_url="https://api.hh.ru", timeout=5.0)
+
+
+async def area_name(area_id: str | int | None) -> str:
+    """Возвращает человекочитаемое название области HH."""
     if not area_id:
         return "—"
-    url = f"https://api.hh.ru/areas/{area_id}"
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(url, timeout=5.0)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("name") or str(area_id)
-        except Exception:
-            return str(area_id)
+    if not str(area_id).isdigit():
+        return str(area_id)
+    try:
+        async with client.get(f"/areas/{area_id}") as resp:
+            if resp.status_code == 200:
+                data = await resp.json()
+                return data.get("name") or str(area_id)
+    except Exception:
+        pass
+    return str(area_id)
