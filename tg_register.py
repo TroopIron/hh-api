@@ -105,6 +105,17 @@ async def safe_edit_markup(message: types.Message, markup: types.InlineKeyboardM
             raise
 
 
+async def safe_delete(message: types.Message) -> None:
+    "Пытаемся удалить сообщение пользователя, не роняя обработчик."
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        # например, если бот не админ или сообщение старше 48 ч
+        pass
+    except Exception:
+        pass
+
+
 # ────────── FastAPI lifecycle ──────────
 @app.on_event("startup")
 async def _startup():
@@ -211,22 +222,27 @@ async def telegram_webhook(request: Request, token: str):
         msg = update.message
         uid = msg.from_user.id
         text = msg.text.strip()
+        pending = await get_pending(uid)
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT OR IGNORE INTO users(chat_id) VALUES (?)", (uid,))
             await db.commit()
 
-        # ---------- commands ----------
-        if text.startswith("/"):
-            if text == "/start":
-                token = await get_user_token(uid)
-                if token:
-                    await bot.send_message(uid, "Вы уже авторизованы ✅")
-                else:
-                    await bot.send_message(uid, f"Авторизуйтесь: {build_oauth_url(uid)}")
-                return {"ok": True}
+        try:
+            # ---------- commands ----------
+            if text.startswith("/"):
+                if text == "/start":
+                    token = await get_user_token(uid)
+                    if token:
+                        await bot.send_message(uid, "Вы уже авторизованы ✅")
+                    else:
+                        await bot.send_message(uid, f"Авторизуйтесь: {build_oauth_url(uid)}")
+                    return {"ok": True}
 
-            if text == "/settings":
-                await set_pending(uid, None)
-                await bot.send_message(uid, "Ваши фильтры:", reply_markup=build_settings_keyboard())
-                return {"ok": True}
+                if text == "/settings":
+                    await set_pending(uid, None)
+                    await bot.send_message(uid, "Ваши фильтры:", reply_markup=build_settings_keyboard())
+                    return {"ok": True}
+        finally:
+            if pending:
+                await safe_delete(msg)
