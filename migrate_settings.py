@@ -9,11 +9,20 @@ async def upgrade(db: aiosqlite.Connection):
     Создаёт таблицы users, user_tokens, queues и user_settings, если они не существуют.
     """
     # Таблица пользователей Telegram
-    await db.execute("""
+    await db.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
-            chat_id INTEGER PRIMARY KEY
+            chat_id INTEGER PRIMARY KEY,
+            settings_msg_id INTEGER
         );
-    """)
+    """
+    )
+
+    # Добавляем колонку settings_msg_id, если база старая
+    async with db.execute("PRAGMA table_info(users)") as cur:
+        cols = [row[1] async for row in cur]
+    if "settings_msg_id" not in cols:
+        await db.execute("ALTER TABLE users ADD COLUMN settings_msg_id INTEGER")
 
     # Таблица токенов пользователей
     await db.execute("""
