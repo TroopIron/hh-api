@@ -1,3 +1,4 @@
+
 import os
 import logging
 from dotenv import load_dotenv
@@ -111,14 +112,14 @@ async def build_filters_summary(uid: int) -> str:
     keyword = esc(await get_user_setting(uid, "keyword") or "—")
 
     return (
-        "<b>📋 Ваши действующие фильтры</b><br/>"
-        f"• Регион: {region}<br/>"
-        f"• ЗП ≥ {salary}<br/>"
-        f"• График: {schedule}<br/>"
-        f"• Формат работы: {work_fmt}<br/>"
-        f"• Тип занятости: {employ}<br/>"
-        f"• Ключевое слово: {keyword}"
-    )
+    "<b>📋 Ваши действующие фильтры</b>\n"
+    f"• Регион: {region}\n"
+    f"• ЗП ≥ {salary}\n"
+    f"• График: {schedule}\n"
+    f"• Формат работы: {work_fmt}\n"
+    f"• Тип занятости: {employ}\n"
+    f"• Ключевое слово: {keyword}"
+)
 
 
 def build_oauth_url(tg_user: int) -> str:
