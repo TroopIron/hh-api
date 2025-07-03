@@ -98,10 +98,10 @@ async def toggle_multi_value(user_id: int, key: str, value: str) -> set[str]:
 
 
 async def build_filters_summary(uid: int) -> str:
-    from aiogram.utils.markdown import escape_md
+    import html
 
     def esc(v: str | None) -> str:
-        return escape_md(str(v)) if v else "—"
+        return html.escape(str(v)) if v else "—"
 
     region_raw = await get_user_setting(uid, "region")
     region = esc(await hh_api.area_name(region_raw))
@@ -112,12 +112,12 @@ async def build_filters_summary(uid: int) -> str:
     keyword = esc(await get_user_setting(uid, "keyword") or "—")
 
     return (
-        "📋 *Ваши действующие фильтры*\n"
-        f"• Регион: {region}\n"
-        f"• ЗП ≥ {salary}\n"
-        f"• График: {schedule}\n"
-        f"• Формат работы: {work_format}\n"
-        f"• Тип занятости: {employment}\n"
+        "<b>📋 Ваши действующие фильтры</b>\n"
+        f"• Регион: {region}<br/>"
+        f"• ЗП ≥ {salary}<br/>"
+        f"• График: {schedule}<br/>"
+        f"• Формат работы: {work_format}<br/>"
+        f"• Тип занятости: {employment}<br/>"
         f"• Ключевое слово: {keyword}"
     )
 
@@ -148,7 +148,7 @@ async def safe_edit_text(
     message: types.Message,
     text: str,
     markup: types.InlineKeyboardMarkup | None,
-    md: bool = False,
+    html: bool = False,
 ):
     """Безопасно обновить текст сообщения и клавиатуру."""
     try:
@@ -157,7 +157,7 @@ async def safe_edit_text(
             chat_id=message.chat.id,
             message_id=message.message_id,
             reply_markup=markup,
-            parse_mode="MarkdownV2" if md else None,
+            parse_mode="HTML" if html else None,
         )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -209,7 +209,7 @@ async def safe_edit_text_by_id(
     msg_id: int | None,
     text: str,
     markup: types.InlineKeyboardMarkup | None,
-    md: bool = False,
+    html: bool = False,
 ):
     """Редактирует сообщение по id, отправляя новое при ошибке."""
     if msg_id is None:
@@ -222,7 +222,7 @@ async def safe_edit_text_by_id(
             chat_id=uid,
             message_id=msg_id,
             reply_markup=markup,
-            parse_mode="MarkdownV2" if md else None,
+            parse_mode="HTML" if html else None,
         )
     except TelegramBadRequest as e:
         err = str(e).lower()
@@ -311,7 +311,7 @@ async def telegram_webhook(request: Request, token: str):
                 types.InlineKeyboardMarkup(
                     inline_keyboard=[[types.InlineKeyboardButton("⬅️ В меню", callback_data="back_menu")]]
                 ),
-                md=True,
+                html=True,
             )
             await bot.answer_callback_query(call.id)
             return {"ok": True}
