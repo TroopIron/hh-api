@@ -1,5 +1,5 @@
 import aiosqlite
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import types
 from typing import Optional
 
 # Путь к SQLite базе
@@ -56,32 +56,60 @@ async def get_user_setting(tg_user: int, key: str) -> Optional[str]:
             return row[0] if row else None
 
 
-def build_main_menu_keyboard() -> InlineKeyboardMarkup:
+def build_main_menu_keyboard() -> types.InlineKeyboardMarkup:
     """Главное меню бота."""
-    kb = [
-        [InlineKeyboardButton("⚙️ Настройка фильтров", callback_data="open_settings")],
-        [InlineKeyboardButton("📄 Резюме", callback_data="open_resumes")],
-        [InlineKeyboardButton("👁️ Просмотр фильтров", callback_data="show_filters")],
+    rows = [
+        [
+            types.InlineKeyboardButton(
+                text="⚙️ Настройка фильтров", callback_data="open_settings"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="📄 Резюме", callback_data="open_resumes"
+            )
+        ],
+        [
+            types.InlineKeyboardButton(
+                text="👁️ Просмотр фильтров", callback_data="show_filters"
+            )
+        ],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_settings_keyboard(with_back: bool = True) -> InlineKeyboardMarkup:
+def build_settings_keyboard(with_back: bool = True) -> types.InlineKeyboardMarkup:
     """Клавиатура управления фильтрами."""
     rows = [
         [
-            InlineKeyboardButton(text="Регион", callback_data="filter_region"),
-            InlineKeyboardButton(text="График", callback_data="filter_schedule"),
+            types.InlineKeyboardButton(
+                text="Регион", callback_data="filter_region"
+            ),
+            types.InlineKeyboardButton(
+                text="График", callback_data="filter_schedule"
+            ),
         ],
         [
-            InlineKeyboardButton(text="Формат работы", callback_data="filter_work_format"),
-            InlineKeyboardButton(text="ЗП", callback_data="filter_salary"),
+            types.InlineKeyboardButton(
+                text="Формат работы", callback_data="filter_work_format"
+            ),
+            types.InlineKeyboardButton(text="ЗП", callback_data="filter_salary"),
         ],
         [
-            InlineKeyboardButton(text="Тип занятости", callback_data="filter_employment_type"),
-            InlineKeyboardButton(text="Ключевое слово", callback_data="filter_keyword"),
+            types.InlineKeyboardButton(
+                text="Тип занятости", callback_data="filter_employment_type"
+            ),
+            types.InlineKeyboardButton(
+                text="Ключевое слово", callback_data="filter_keyword"
+            ),
         ],
     ]
     if with_back:
-        rows.append([InlineKeyboardButton("⬅️ В меню", callback_data="back_menu")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+        rows.append(
+            [
+                types.InlineKeyboardButton(
+                    text="⬅️ В меню", callback_data="back_menu"
+                )
+            ]
+        )
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
