@@ -5,7 +5,7 @@ import logging
 import time
 import aiosqlite
 from fastapi import FastAPI, Request, HTTPException
-from hh_api import HHClient
+from hh_api import HHApiClient
 from chatgpt_client import ChatGPTClient
 from aiogram import Bot
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Инициализация FastAPI и клиентов
 app = FastAPI()
-hh_client = HHClient(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI)
+hh_client = HHApiClient()
 chatgpt_client = ChatGPTClient()
 
 # Путь к SQLite
@@ -96,11 +96,14 @@ async def search(tg_user: int, text: str = "python", per_page: int = 10):
     token = await get_user_token(tg_user)
     if not token:
         raise HTTPException(401, "No token stored for user")
+    client = HHApiClient(token)
     try:
-        vacancies = await hh_client.search_vacancies(token, text=text, per_page=per_page)
+        vacancies = await client.search_vacancies(text=text, per_page=per_page)
     except Exception as e:
         logger.error("HH API error при поиске: %s", e)
         raise HTTPException(500, "HH API error")
+    finally:
+        await client.close()
     return {"vacancies": vacancies}
 
 @app.get("/resumes")
@@ -109,11 +112,14 @@ async def resumes(tg_user: int):
     token = await get_user_token(tg_user)
     if not token:
         raise HTTPException(401, "No token stored for user")
+    client = HHApiClient(token)
     try:
-        resumes = await hh_client.list_resumes(token)
+        resumes = await client.list_resumes()
     except Exception as e:
         logger.error("HH API error при получении резюме: %s", e)
         raise HTTPException(500, "HH API error on resumes")
+    finally:
+        await client.close()
     return {"resumes": resumes}
 
 @app.post("/auto_reply")
@@ -127,11 +133,14 @@ async def auto_reply(tg_user: int, vacancy_id: str, resume_id: str):
     except Exception as e:
         logger.error("ChatGPT error при генерации сопроводительного письма: %s", e)
         raise HTTPException(500, "ChatGPT generation error")
+    client = HHApiClient(token)
     try:
-        result = await hh_client.respond_to_vacancy(
-            token, vacancy_id, resume_id, cover_letter
+        result = await client.respond_to_vacancy(
+            vacancy_id, resume_id, cover_letter
         )
     except Exception as e:
         logger.error("HH API error при отправке отклика: %s", e)
         raise HTTPException(500, "HH API respond error")
+    finally:
+        await client.close()
     return {"result": result}
