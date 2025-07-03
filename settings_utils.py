@@ -75,5 +75,8 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Тип занятости", callback_data="filter_employment_type"),
             InlineKeyboardButton(text="Ключевое слово", callback_data="filter_keyword"),
         ],
+        [
+            InlineKeyboardButton(text="\U0001F441\uFE0F Просмотр", callback_data="show_filters"),
+        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
