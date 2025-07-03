@@ -56,13 +56,19 @@ async def get_user_setting(tg_user: int, key: str) -> Optional[str]:
             return row[0] if row else None
 
 
-def build_settings_keyboard() -> InlineKeyboardMarkup:
-    """
-    Строит клавиатуру фильтров для настроек. Кнопки в два ряда:
-    Регион, График, Формат работы, ЗП, Тип занятости, Ключевое слово
-    """
-    # Группируем кнопки по по два в ряд
-    keyboard = [
+def build_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное меню бота."""
+    kb = [
+        [InlineKeyboardButton("⚙️ Настройка фильтров", callback_data="open_settings")],
+        [InlineKeyboardButton("📄 Резюме", callback_data="open_resumes")],
+        [InlineKeyboardButton("👁️ Просмотр фильтров", callback_data="show_filters")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def build_settings_keyboard(with_back: bool = True) -> InlineKeyboardMarkup:
+    """Клавиатура управления фильтрами."""
+    rows = [
         [
             InlineKeyboardButton(text="Регион", callback_data="filter_region"),
             InlineKeyboardButton(text="График", callback_data="filter_schedule"),
@@ -75,8 +81,7 @@ def build_settings_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Тип занятости", callback_data="filter_employment_type"),
             InlineKeyboardButton(text="Ключевое слово", callback_data="filter_keyword"),
         ],
-        [
-            InlineKeyboardButton(text="\U0001F441\uFE0F Просмотр", callback_data="show_filters"),
-        ],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+    if with_back:
+        rows.append([InlineKeyboardButton("⬅️ В меню", callback_data="back_menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
