@@ -51,7 +51,6 @@ async def get_user_token(tg_user: int) -> str | None:
 SCHEDULE_SUGGESTIONS = ["полный день", "гибкий график", "сменный график"]
 WORK_FORMAT_SUGGESTIONS = ["дистанционно", "офис", "гибрид"]
 EMPLOYMENT_TYPE_SUGGESTIONS = ["полная", "частичная", "проектная", "стажировка"]
-SALARY_SUGGESTIONS = ["50000", "100000", "150000"]
 
 MULTI_KEYS = {
     "schedule": SCHEDULE_SUGGESTIONS,
@@ -61,7 +60,12 @@ MULTI_KEYS = {
 
 # ────────── helpers ──────────
 
-def build_inline_suggestions(values: list[str], prefix: str, selected: set[str] | None = None):
+def build_inline_suggestions(
+    values: list[str],
+    prefix: str,
+    selected: set[str] | None = None,
+    with_back: bool = False,
+):
     """Собирает клавиатуру‑однострочник; отмечает выбранные чек‑марк."""
     selected = selected or set()
     rows = [
@@ -73,6 +77,12 @@ def build_inline_suggestions(values: list[str], prefix: str, selected: set[str] 
         ]
         for v in values
     ]
+    if with_back:
+        rows.append([
+            types.InlineKeyboardButton(
+                text="⬅️ Назад", callback_data="back_settings"
+            )
+        ])
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -150,6 +160,11 @@ async def telegram_webhook(request: Request, token: str):
             await db.execute("INSERT OR IGNORE INTO users(chat_id) VALUES (?)", (uid,))
             await db.commit()
 
+        if data == "back_settings":
+            await bot.delete_message(uid, call.message.message_id)
+            await bot.send_message(uid, "Ваши фильтры:", reply_markup=build_settings_keyboard())
+            return {"ok": True}
+
         # ---------- запуск фильтров ----------
         if data.startswith("filter_"):
             fkey = data.split("_", 1)[1]
@@ -161,11 +176,7 @@ async def telegram_webhook(request: Request, token: str):
 
             if fkey == "salary":
                 await set_pending(uid, "salary")
-                await bot.send_message(
-                    uid,
-                    "Введите минимальную зарплату (число) или выберите кнопку:",
-                    reply_markup=build_inline_suggestions(SALARY_SUGGESTIONS, "salary_suggest"),
-                )
+                await bot.send_message(uid, "Введите минимальную зарплату (число):")
                 return {"ok": True}
 
             if fkey in MULTI_KEYS:
@@ -174,7 +185,9 @@ async def telegram_webhook(request: Request, token: str):
                 await bot.send_message(
                     uid,
                     f"Выберите {fkey.replace('_', ' ')} (можно несколько):",
-                    reply_markup=build_inline_suggestions(MULTI_KEYS[fkey], f"{fkey}_suggest", sel_set),
+                    reply_markup=build_inline_suggestions(
+                        MULTI_KEYS[fkey], f"{fkey}_suggest", sel_set, with_back=True
+                    ),
                 )
                 return {"ok": True}
 
@@ -186,18 +199,13 @@ async def telegram_webhook(request: Request, token: str):
                 sel_set = await toggle_multi_value(uid, m, val)
                 await safe_edit_markup(
                     call.message,
-                    build_inline_suggestions(MULTI_KEYS[m], f"{m}_suggest", sel_set),
+                    build_inline_suggestions(
+                        MULTI_KEYS[m], f"{m}_suggest", sel_set, with_back=True
+                    ),
                 )
                 await bot(call.answer("✓"))
                 return {"ok": True}
 
-        # ---------- salary кнопка ----------
-        if data.startswith("salary_suggest_"):
-            val = data.split("_")[-1]
-            await save_user_setting(uid, "salary", val)
-            await safe_edit_markup(call.message, None)
-            await bot(call.answer("Сохранено"))
-            return {"ok": True}
 
         # ---------- region из suggestions ----------
         if data.startswith("region_suggest_"):
