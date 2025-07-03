@@ -98,19 +98,20 @@ async def toggle_multi_value(user_id: int, key: str, value: str) -> set[str]:
 
 
 async def build_filters_summary(uid: int) -> str:
-    def fmt(val):
-        return val if val else "—"
+    from aiogram.utils.markdown import escape_md
 
-    region_id = await get_user_setting(uid, "region")
-    region = await hh_api.area_name(region_id) if region_id else "—"
-    salary = await get_user_setting(uid, "salary") or "—"
-    schedule = fmt(await get_user_setting(uid, "schedule"))
-    work_format = fmt(await get_user_setting(uid, "work_format"))
-    employment = fmt(await get_user_setting(uid, "employment_type"))
-    keyword = fmt(await get_user_setting(uid, "keyword"))
-    from aiogram.utils.text_decorations import escape_md
+    def esc(v: str | None) -> str:
+        return escape_md(str(v)) if v else "—"
 
-    summary = (
+    region_raw = await get_user_setting(uid, "region")
+    region = esc(await hh_api.area_name(region_raw))
+    salary = esc(await get_user_setting(uid, "salary") or "—")
+    schedule = esc(await get_user_setting(uid, "schedule") or "—")
+    work_format = esc(await get_user_setting(uid, "work_format") or "—")
+    employment = esc(await get_user_setting(uid, "employment_type") or "—")
+    keyword = esc(await get_user_setting(uid, "keyword") or "—")
+
+    return (
         "📋 *Ваши действующие фильтры*\n"
         f"• Регион: {region}\n"
         f"• ЗП ≥ {salary}\n"
@@ -119,7 +120,6 @@ async def build_filters_summary(uid: int) -> str:
         f"• Тип занятости: {employment}\n"
         f"• Ключевое слово: {keyword}"
     )
-    return escape_md(summary)
 
 
 def build_oauth_url(tg_user: int) -> str:
