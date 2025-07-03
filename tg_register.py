@@ -109,16 +109,26 @@ def build_oauth_url(tg_user: int) -> str:
 async def safe_edit_markup(message: types.Message, markup: types.InlineKeyboardMarkup | None = None):
     """Обновить reply_markup; игнорировать BadRequest, если не изменилось."""
     try:
-        await bot(message.edit_reply_markup(reply_markup=markup))
+        await bot.edit_message_reply_markup(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reply_markup=markup,
+        )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
 
 
-async def safe_edit_text(message: types.Message, text: str, markup: types.InlineKeyboardMarkup):
+async def safe_edit_text(message: types.Message, text: str,
+                         markup: types.InlineKeyboardMarkup | None):
     """Безопасно обновить текст сообщения и клавиатуру."""
     try:
-        await bot(message.edit_text(text, reply_markup=markup))
+        await bot.edit_message_text(
+            text=text,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reply_markup=markup,
+        )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -176,7 +186,12 @@ async def safe_edit_text_by_id(
         await set_settings_msg_id(uid, new_msg.message_id)
         return
     try:
-        await bot.edit_message_text(text, uid, msg_id, reply_markup=markup)
+        await bot.edit_message_text(
+            text=text,
+            chat_id=uid,
+            message_id=msg_id,
+            reply_markup=markup,
+        )
     except TelegramBadRequest as e:
         err = str(e).lower()
         if "message to edit not found" in err:
