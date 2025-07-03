@@ -1,11 +1,12 @@
-# tg_register.py
 import os
 import logging
 from dotenv import load_dotenv
 
 import aiosqlite
+import time
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, types
+from aiogram.exceptions import TelegramBadRequest
 
 from settings_utils import (
     save_user_setting,
@@ -17,16 +18,13 @@ from settings_utils import (
 from resume_utils import build_resume_keyboard
 import hh_api
 
-# ────────────────────────────
-# Базовая инициализация
-# ────────────────────────────
+# ────────── базовая инициализация ──────────
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 if not BOT_TOKEN:
-    logger.error("TG_BOT_TOKEN not set in .env or environment")
     raise RuntimeError("TG_BOT_TOKEN not set")
 
 bot = Bot(token=BOT_TOKEN)
@@ -34,410 +32,201 @@ app = FastAPI()
 
 DB_PATH = "tg_users.db"
 
-# ────────────────────────────
-# Константы-подсказки для фильтров
-# ────────────────────────────
-SCHEDULE_SUGGESTIONS = [
-    "полный день",
-    "гибкий график",
-    "сменный график",
-]
+# ────────── helpers ──────────
+async def get_user_token(tg_user: int) -> str | None:
+    """
+    Читаем access_token из таблицы user_tokens.
+    Возвращаем None, если запись не найдена.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT access_token FROM user_tokens WHERE tg_user = ?",
+            (tg_user,),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
 
-WORK_FORMAT_SUGGESTIONS = [
-    "дистанционно",
-    "офис",
-    "гибрид",
-]
 
-EMPLOYMENT_TYPE_SUGGESTIONS = [
-    "полная",
-    "частичная",
-    "проектная",
-    "стажировка",
-]
-
+# ────────── подсказки ──────────
+SCHEDULE_SUGGESTIONS = ["полный день", "гибкий график", "сменный график"]
+WORK_FORMAT_SUGGESTIONS = ["дистанционно", "офис", "гибрид"]
+EMPLOYMENT_TYPE_SUGGESTIONS = ["полная", "частичная", "проектная", "стажировка"]
 SALARY_SUGGESTIONS = ["50000", "100000", "150000"]
 
-# ────────────────────────────
-# FastAPI-хуки
-# ────────────────────────────
+MULTI_KEYS = {
+    "schedule": SCHEDULE_SUGGESTIONS,
+    "work_format": WORK_FORMAT_SUGGESTIONS,
+    "employment_type": EMPLOYMENT_TYPE_SUGGESTIONS,
+}
+
+# ────────── helpers ──────────
+
+def build_inline_suggestions(values: list[str], prefix: str, selected: set[str] | None = None):
+    """Собирает клавиатуру‑однострочник; отмечает выбранные чек‑марк."""
+    selected = selected or set()
+    rows = [
+        [
+            types.InlineKeyboardButton(
+                text=("✅ " if v in selected else "") + v,
+                callback_data=f"{prefix}_{v}",
+            )
+        ]
+        for v in values
+    ]
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def toggle_multi_value(user_id: int, key: str, value: str) -> set[str]:
+    curr = await get_user_setting(user_id, key) or ""
+    items = {v.strip() for v in curr.split(",") if v.strip()}
+    if value in items:
+        items.remove(value)
+    else:
+        items.add(value)
+    await save_user_setting(user_id, key, ",".join(items))
+    return items
+
+
+def build_oauth_url(tg_user: int) -> str:
+    return (
+        "https://hh.ru/oauth/authorize?response_type=code"
+        f"&client_id={os.getenv('HH_CLIENT_ID')}"
+        f"&redirect_uri={os.getenv('REDIRECT_URI')}"
+        f"&state={tg_user}"
+    )
+
+
+async def safe_edit_markup(message: types.Message, markup: types.InlineKeyboardMarkup | None = None):
+    """Обновить reply_markup; игнорировать BadRequest, если не изменилось."""
+    try:
+        await bot(message.edit_reply_markup(reply_markup=markup))
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+
+
+# ────────── FastAPI lifecycle ──────────
 @app.on_event("startup")
-async def on_startup():
-    webhook_url = os.getenv("WEBHOOK_URL")
-    if webhook_url:
+async def _startup():
+    webhook = os.getenv("WEBHOOK_URL")
+    if webhook:
         await bot.delete_webhook(drop_pending_updates=True)
-        await bot.set_webhook(webhook_url)
-        logger.info(f"Webhook installed: {webhook_url}")
+        await bot.set_webhook(webhook)
+        logger.info("Webhook set: %s", webhook)
 
 
 @app.on_event("shutdown")
-async def on_shutdown():
+async def _shutdown():
     await bot.session.close()
 
-# ────────────────────────────
-# Основной вебхук Telegram
-# ────────────────────────────
+
+# ────────── main webhook ──────────
 @app.post("/bot{token:path}")
 async def telegram_webhook(request: Request, token: str):
-    # Валидация токена вебхука
     if token != BOT_TOKEN:
-        logger.warning("Invalid webhook token: %s", token)
         raise HTTPException(status_code=403, detail="Invalid token")
 
-    body = await request.json()
-    update = types.Update(**body)
+    update = types.Update(**await request.json())
 
-    # ────────── Callback-кнопки ──────────
+    # ===== CALLBACKS =====
     if update.callback_query:
         call = update.callback_query
-        user_id = call.from_user.id
-
-        # гарантируем наличие пользователя в БД
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO users(chat_id) VALUES (?)",
-                (user_id,),
-            )
-            await db.commit()
-
+        uid = call.from_user.id
         data = call.data
 
-        # 1. запуск ввода по фильтрам
-        if data == "filter_region":
-            await set_pending(user_id, "region")
-            await bot.send_message(user_id, "Введите название региона:")
-        elif data == "filter_schedule":
-            await set_pending(user_id, "schedule")
-            await bot.send_message(
-                user_id, "Введите желаемый график (например, полный день):"
-            )
-        elif data == "filter_work_format":
-            await set_pending(user_id, "work_format")
-            await bot.send_message(
-                user_id, "Введите формат работы (дистанционно/офис/гибрид):"
-            )
-        elif data == "filter_salary":
-            await set_pending(user_id, "salary")
-            await bot.send_message(user_id, "Введите минимальную зарплату в рублях:")
-        elif data == "filter_employment_type":
-            await set_pending(user_id, "employment_type")
-            await bot.send_message(
-                user_id, "Введите тип занятости (полная/частичная/проектная):"
-            )
-        elif data == "filter_keyword":
-            await set_pending(user_id, "keyword")
-            await bot.send_message(user_id, "Введите ключевое слово для поиска:")
-
-        # 2. выбор значения из подсказок
-        elif data.startswith("region_suggest_"):
-            area_id = int(data.split("_")[-1])
-            await save_user_setting(user_id, "region", area_id)
-            await set_pending(user_id, None)
-
-            await bot(call.answer())
-            await bot(call.message.edit_reply_markup())
-
-            await bot.send_message(user_id, "✅ Регион установлен!")
-            await bot.send_message(
-                user_id, "Ваши настройки:", reply_markup=build_settings_keyboard()
-            )
-
-        elif data.startswith("schedule_suggest_"):
-            value = data.split("_")[-1]
-            await save_user_setting(user_id, "schedule", value)
-            await set_pending(user_id, None)
-
-            await bot(call.answer())
-            await bot(call.message.edit_reply_markup())
-
-            await bot.send_message(user_id, "✅ График работы установлен!")
-            await bot.send_message(
-                user_id, "Ваши настройки:", reply_markup=build_settings_keyboard()
-            )
-
-        elif data.startswith("work_format_suggest_"):
-            value = data.split("_")[-1]
-            await save_user_setting(user_id, "work_format", value)
-            await set_pending(user_id, None)
-
-            await bot(call.answer())
-            await bot(call.message.edit_reply_markup())
-
-            await bot.send_message(user_id, "✅ Формат работы установлен!")
-            await bot.send_message(
-                user_id, "Ваши настройки:", reply_markup=build_settings_keyboard()
-            )
-
-        elif data.startswith("salary_suggest_"):
-            value = data.split("_")[-1]
-            await save_user_setting(user_id, "salary", value)
-            await set_pending(user_id, None)
-
-            await bot(call.answer())
-            await bot(call.message.edit_reply_markup())
-
-            await bot.send_message(user_id, "✅ Зарплата установлена!")
-            await bot.send_message(
-                user_id, "Ваши настройки:", reply_markup=build_settings_keyboard()
-            )
-
-        elif data.startswith("employment_type_suggest_"):
-            value = data.split("_")[-1]
-            await save_user_setting(user_id, "employment_type", value)
-            await set_pending(user_id, None)
-
-            await bot(call.answer())
-            await bot(call.message.edit_reply_markup())
-
-            await bot.send_message(user_id, "✅ Тип занятости установлен!")
-            await bot.send_message(
-                user_id, "Ваши настройки:", reply_markup=build_settings_keyboard()
-            )
-
-        # 3. выбор резюме
-        elif data.startswith("select_resume_"):
-            resume_id = data.split("_")[-1]
-            await save_user_setting(user_id, "resume", resume_id)
-            await bot.send_message(user_id, "Резюме сохранено 👍")
-
-        await bot(call.answer())
-        return {"ok": True}
-
-    # ────────── Текстовые сообщения ──────────
-    if update.message and update.message.text:
-        msg = update.message
-        user_id = msg.from_user.id
-        text = msg.text.strip()
-
-        # гарантируем наличие пользователя в БД
+        # ensure user row exists
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO users(chat_id) VALUES (?)",
-                (user_id,),
-            )
+            await db.execute("INSERT OR IGNORE INTO users(chat_id) VALUES (?)", (uid,))
             await db.commit()
 
-        # ─── Команды (начинаются с /) ───
-        if text.startswith("/"):
-            if text == "/start":
-                auth_url = build_oauth_url(user_id)
+        # ---------- запуск фильтров ----------
+        if data.startswith("filter_"):
+            fkey = data.split("_", 1)[1]
+
+            if fkey == "region":
+                await set_pending(uid, "region")
+                await bot.send_message(uid, "Введите название региона:")
+                return {"ok": True}
+
+            if fkey == "salary":
+                await set_pending(uid, "salary")
                 await bot.send_message(
-                    user_id,
-                    f"Авторизуйтесь: {auth_url}",
+                    uid,
+                    "Введите минимальную зарплату (число) или выберите кнопку:",
+                    reply_markup=build_inline_suggestions(SALARY_SUGGESTIONS, "salary_suggest"),
                 )
-            elif text == "/settings":
-                await set_pending(user_id, None)
-                async with aiosqlite.connect(DB_PATH) as db:
-                    cur = await db.execute(
-                        "SELECT key, value FROM user_settings WHERE tg_user = ?",
-                        (user_id,),
-                    )
-                    settings = await cur.fetchall()
-                if settings:
-                    msg_text = "Ваши настройки:\n" + "\n".join(
-                        f"{k}: {v}" for k, v in settings
-                    )
-                else:
-                    msg_text = "У вас ещё нет сохранённых настроек."
+                return {"ok": True}
+
+            if fkey in MULTI_KEYS:
+                selection = await get_user_setting(uid, fkey) or ""
+                sel_set = {i.strip() for i in selection.split(",") if i.strip()}
                 await bot.send_message(
-                    user_id, msg_text, reply_markup=build_settings_keyboard()
+                    uid,
+                    f"Выберите {fkey.replace('_', ' ')} (можно несколько):",
+                    reply_markup=build_inline_suggestions(MULTI_KEYS[fkey], f"{fkey}_suggest", sel_set),
                 )
-            elif text == "/cancel":
-                await set_pending(user_id, None)
-                await bot.send_message(user_id, "Действие отменено.")
-            else:
-                await bot.send_message(user_id, "Неизвестная команда.")
+                return {"ok": True}
+
+        # ---------- мультивыбор ----------
+        for m in MULTI_KEYS:
+            prefix = f"{m}_suggest_"
+            if data.startswith(prefix):
+                val = data[len(prefix):]
+                sel_set = await toggle_multi_value(uid, m, val)
+                await safe_edit_markup(
+                    call.message,
+                    build_inline_suggestions(MULTI_KEYS[m], f"{m}_suggest", sel_set),
+                )
+                await bot(call.answer("✓"))
+                return {"ok": True}
+
+        # ---------- salary кнопка ----------
+        if data.startswith("salary_suggest_"):
+            val = data.split("_")[-1]
+            await save_user_setting(uid, "salary", val)
+            await safe_edit_markup(call.message, None)
+            await bot(call.answer("Сохранено"))
             return {"ok": True}
 
-        # ─── Обработка ожидаемого ввода ───
-        pending = await get_pending(user_id)
-        if pending:
-            # ----------- Регион -----------
-            if pending == "region":
-                suggestions = await hh_api.get_area_suggestions(text)
-                match = next(
-                    (a for a in suggestions if text.lower() == a.name.lower()), None
-                )
-                if match:
-                    await save_user_setting(user_id, "region", match.id)
-                    await set_pending(user_id, None)
+        # ---------- region из suggestions ----------
+        if data.startswith("region_suggest_"):
+            area_id = int(data.split("_")[-1])
+            await save_user_setting(uid, "region", area_id)
+            await safe_edit_markup(call.message, None)
+            await bot(call.answer("Сохранено"))
+            return {"ok": True}
 
-                    await bot.send_message(
-                        user_id, f"✅ Регион установлен: {match.name}"
-                    )
-                    await bot.send_message(
-                        user_id,
-                        "Ваши настройки:",
-                        reply_markup=build_settings_keyboard(),
-                    )
-                    return {"ok": True}
+        # ---------- выбор резюме ----------
+        if data.startswith("select_resume_"):
+            rid = data.split("_")[-1]
+            await save_user_setting(uid, "resume", rid)
+            await bot(call.answer("Резюме сохранено"))
+            return {"ok": True}
 
-                # если не найдено точное совпадение — показываем подсказки
-                kb_rows = [
-                    [
-                        types.InlineKeyboardButton(
-                            area.name, callback_data=f"region_suggest_{area.id}"
-                        )
-                    ]
-                    for area in suggestions[:6]
-                ]
-                await bot.send_message(
-                    user_id,
-                    "❓ Уточните регион, выберите из списка:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_rows),
-                )
-                return {"ok": True}
-
-            # ----------- График -----------
-            if pending == "schedule":
-                match = next(
-                    (s for s in SCHEDULE_SUGGESTIONS if text.lower() == s.lower()),
-                    None,
-                )
-                if match:
-                    await save_user_setting(user_id, "schedule", match)
-                    await set_pending(user_id, None)
-                    await bot.send_message(
-                        user_id, f"✅ График работы установлен: {match}"
-                    )
-                    await bot.send_message(
-                        user_id,
-                        "Ваши настройки:",
-                        reply_markup=build_settings_keyboard(),
-                    )
-                    return {"ok": True}
-
-                kb_rows = [
-                    [
-                        types.InlineKeyboardButton(
-                            val, callback_data=f"schedule_suggest_{val}"
-                        )
-                    ]
-                    for val in SCHEDULE_SUGGESTIONS[:6]
-                ]
-                await bot.send_message(
-                    user_id,
-                    "❓ Уточните график, выберите из списка:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_rows),
-                )
-                return {"ok": True}
-
-            # ----------- Формат работы -----------
-            if pending == "work_format":
-                match = next(
-                    (s for s in WORK_FORMAT_SUGGESTIONS if text.lower() == s.lower()),
-                    None,
-                )
-                if match:
-                    await save_user_setting(user_id, "work_format", match)
-                    await set_pending(user_id, None)
-                    await bot.send_message(
-                        user_id, f"✅ Формат работы установлен: {match}"
-                    )
-                    await bot.send_message(
-                        user_id,
-                        "Ваши настройки:",
-                        reply_markup=build_settings_keyboard(),
-                    )
-                    return {"ok": True}
-
-                kb_rows = [
-                    [
-                        types.InlineKeyboardButton(
-                            val, callback_data=f"work_format_suggest_{val}"
-                        )
-                    ]
-                    for val in WORK_FORMAT_SUGGESTIONS[:6]
-                ]
-                await bot.send_message(
-                    user_id,
-                    "❓ Уточните формат работы, выберите из списка:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_rows),
-                )
-                return {"ok": True}
-
-            # ----------- Зарплата -----------
-            if pending == "salary":
-                if text.isdigit():
-                    await save_user_setting(user_id, "salary", text)
-                    await set_pending(user_id, None)
-                    await bot.send_message(user_id, "✅ Зарплата установлена.")
-                    await bot.send_message(
-                        user_id,
-                        "Ваши настройки:",
-                        reply_markup=build_settings_keyboard(),
-                    )
-                    return {"ok": True}
-
-                kb_rows = [
-                    [
-                        types.InlineKeyboardButton(
-                            val, callback_data=f"salary_suggest_{val}"
-                        )
-                    ]
-                    for val in SALARY_SUGGESTIONS[:6]
-                ]
-                await bot.send_message(
-                    user_id,
-                    "❓ Введите число или выберите из вариантов:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_rows),
-                )
-                return {"ok": True}
-
-            # ----------- Тип занятости -----------
-            if pending == "employment_type":
-                match = next(
-                    (s for s in EMPLOYMENT_TYPE_SUGGESTIONS if text.lower() == s.lower()),
-                    None,
-                )
-                if match:
-                    await save_user_setting(user_id, "employment_type", match)
-                    await set_pending(user_id, None)
-                    await bot.send_message(
-                        user_id, f"✅ Тип занятости установлен: {match}"
-                    )
-                    await bot.send_message(
-                        user_id,
-                        "Ваши настройки:",
-                        reply_markup=build_settings_keyboard(),
-                    )
-                    return {"ok": True}
-
-                kb_rows = [
-                    [
-                        types.InlineKeyboardButton(
-                            val, callback_data=f"employment_type_suggest_{val}"
-                        )
-                    ]
-                    for val in EMPLOYMENT_TYPE_SUGGESTIONS[:6]
-                ]
-                await bot.send_message(
-                    user_id,
-                    "❓ Уточните тип занятости, выберите из списка:",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=kb_rows),
-                )
-                return {"ok": True}
-
-            # ----------- Ключевое слово -----------
-            if pending == "keyword":
-                await save_user_setting(user_id, "keyword", text)
-                await set_pending(user_id, None)
-                await bot.send_message(user_id, "Ключевое слово сохранено 👍")
-                return {"ok": True}
-
-        # Если нет ни pending, ни команды
+        await bot(call.answer())  # fallback
         return {"ok": True}
 
-    # Если апдейт не текстовый/не callback
-    return {"ok": True}
+    # ===== TEXT =====
+    if update.message and update.message.text:
+        msg = update.message
+        uid = msg.from_user.id
+        text = msg.text.strip()
 
-# ────────────────────────────
-# Вспомогательные функции
-# ────────────────────────────
-def build_oauth_url(tg_user: int) -> str:
-    client_id = os.getenv("HH_CLIENT_ID")
-    redirect_uri = os.getenv("REDIRECT_URI")
-    return (
-        "https://hh.ru/oauth/authorize?response_type=code"
-        f"&client_id={client_id}&redirect_uri={redirect_uri}&state={tg_user}"
-    )
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("INSERT OR IGNORE INTO users(chat_id) VALUES (?)", (uid,))
+            await db.commit()
+
+        # ---------- commands ----------
+        if text.startswith("/"):
+            if text == "/start":
+                token = await get_user_token(uid)
+                if token:
+                    await bot.send_message(uid, "Вы уже авторизованы ✅")
+                else:
+                    await bot.send_message(uid, f"Авторизуйтесь: {build_oauth_url(uid)}")
+                return {"ok": True}
+
+            if text == "/settings":
+                await set_pending(uid, None)
+                await bot.send_message(uid, "Ваши фильтры:", reply_markup=build_settings_keyboard())
+                return {"ok": True}
