@@ -11,6 +11,7 @@ from settings_utils import (
     save_user_setting,
     get_user_setting,
     build_settings_keyboard,
+    build_main_menu_keyboard,
     set_pending,
     get_pending,
 )
@@ -277,6 +278,44 @@ async def telegram_webhook(request: Request, token: str):
             await db.execute("INSERT OR IGNORE INTO users(chat_id) VALUES (?)", (uid,))
             await db.commit()
 
+        # === возврат в главное меню ===
+        if data == "back_menu":
+            smsg = await get_settings_msg_id(uid)
+            await safe_edit_text_by_id(uid, smsg, "📌 Главное меню:", build_main_menu_keyboard())
+            await bot.answer_callback_query(call.id)
+            return {"ok": True}
+
+        # === открыть настройку фильтров ===
+        if data == "open_settings":
+            smsg = await get_settings_msg_id(uid)
+            await safe_edit_text_by_id(uid, smsg, "Ваши фильтры:", build_settings_keyboard())
+            await bot.answer_callback_query(call.id)
+            return {"ok": True}
+
+        # === открыть резюме ===
+        if data == "open_resumes":
+            kb = await build_resume_keyboard(uid)
+            kb.add(types.InlineKeyboardButton("⬅️ В меню", callback_data="back_menu"))
+            await safe_edit_text(
+                call.message,
+                "📄 Ваши резюме:",
+                kb,
+            )
+            return {"ok": True}
+
+        if data == "show_filters":
+            summary = await build_filters_summary(uid)
+            await safe_edit_text(
+                call.message,
+                summary,
+                types.InlineKeyboardMarkup(
+                    inline_keyboard=[[types.InlineKeyboardButton("⬅️ В меню", callback_data="back_menu")]]
+                ),
+                md=True,
+            )
+            await bot.answer_callback_query(call.id)
+            return {"ok": True}
+
         if data == "back_settings":
             smsg = await get_settings_msg_id(uid)
             await safe_edit_text_by_id(
@@ -288,20 +327,6 @@ async def telegram_webhook(request: Request, token: str):
             await bot.answer_callback_query(call.id)
             return {"ok": True}
 
-        if data == "show_filters":
-            summary = await build_filters_summary(uid)
-            await safe_edit_text(
-                call.message,
-                summary,
-                types.InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [types.InlineKeyboardButton("⬅️ Назад", callback_data="back_settings")]
-                    ]
-                ),
-                md=True,
-            )
-            await bot.answer_callback_query(call.id)
-            return {"ok": True}
 
         # ---------- запуск фильтров ----------
         if data.startswith("filter_"):
@@ -382,12 +407,14 @@ async def telegram_webhook(request: Request, token: str):
         try:
             # ---------- commands ----------
             if text.startswith("/"):
-                if text == "/start":
-                    token = await get_user_token(uid)
-                    if token:
-                        await bot.send_message(uid, "Вы уже авторизованы ✅")
-                    else:
-                        await bot.send_message(uid, f"Авторизуйтесь: {build_oauth_url(uid)}")
+                if text in ("/start", "/menu"):
+                    await set_pending(uid, None)
+                    msg = await bot.send_message(
+                        uid,
+                        "📌 Главное меню:",
+                        reply_markup=build_main_menu_keyboard(),
+                    )
+                    await set_settings_msg_id(uid, msg.message_id)
                     return {"ok": True}
 
                 if text == "/settings":
