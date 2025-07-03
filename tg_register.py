@@ -294,11 +294,6 @@ async def telegram_webhook(request: Request, token: str):
         # === открыть резюме ===
         if data == "open_resumes":
             kb = await build_resume_keyboard(uid)
-            kb.add(
-                types.InlineKeyboardButton(
-                    text="⬅️ В меню", callback_data="back_menu"
-                )
-            )
             await safe_edit_text(
                 call.message,
                 "📄 Ваши резюме:",
