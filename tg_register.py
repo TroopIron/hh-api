@@ -115,6 +115,15 @@ async def safe_edit_markup(message: types.Message, markup: types.InlineKeyboardM
             raise
 
 
+async def safe_edit_text(message: types.Message, text: str, markup: types.InlineKeyboardMarkup):
+    """Безопасно обновить текст сообщения и клавиатуру."""
+    try:
+        await bot(message.edit_text(text, reply_markup=markup))
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+
+
 async def safe_delete(message: types.Message) -> None:
     "Пытаемся удалить сообщение пользователя, не роняя обработчик."
     try:
@@ -161,8 +170,12 @@ async def telegram_webhook(request: Request, token: str):
             await db.commit()
 
         if data == "back_settings":
-            await bot.delete_message(uid, call.message.message_id)
-            await bot.send_message(uid, "Ваши фильтры:", reply_markup=build_settings_keyboard())
+            await safe_edit_text(
+                call.message,
+                "Ваши фильтры:",
+                build_settings_keyboard(),
+            )
+            await bot.answer_callback_query(call.id)
             return {"ok": True}
 
         # ---------- запуск фильтров ----------
