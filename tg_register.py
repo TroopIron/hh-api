@@ -6,6 +6,7 @@ import aiosqlite
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, types
 from aiogram.exceptions import TelegramBadRequest
+import html
 
 from settings_utils import (
     save_user_setting,
@@ -98,26 +99,24 @@ async def toggle_multi_value(user_id: int, key: str, value: str) -> set[str]:
 
 
 async def build_filters_summary(uid: int) -> str:
-    import html
-
-    def esc(v: str | None) -> str:
+    def esc(v):
         return html.escape(str(v)) if v else "—"
 
     region_raw = await get_user_setting(uid, "region")
     region = esc(await hh_api.area_name(region_raw))
     salary = esc(await get_user_setting(uid, "salary") or "—")
     schedule = esc(await get_user_setting(uid, "schedule") or "—")
-    work_format = esc(await get_user_setting(uid, "work_format") or "—")
-    employment = esc(await get_user_setting(uid, "employment_type") or "—")
+    work_fmt = esc(await get_user_setting(uid, "work_format") or "—")
+    employ = esc(await get_user_setting(uid, "employment_type") or "—")
     keyword = esc(await get_user_setting(uid, "keyword") or "—")
 
     return (
-        "<b>📋 Ваши действующие фильтры</b>\n"
+        "<b>📋 Ваши действующие фильтры</b><br/>"
         f"• Регион: {region}<br/>"
         f"• ЗП ≥ {salary}<br/>"
         f"• График: {schedule}<br/>"
-        f"• Формат работы: {work_format}<br/>"
-        f"• Тип занятости: {employment}<br/>"
+        f"• Формат работы: {work_fmt}<br/>"
+        f"• Тип занятости: {employ}<br/>"
         f"• Ключевое слово: {keyword}"
     )
 
@@ -295,7 +294,11 @@ async def telegram_webhook(request: Request, token: str):
         # === открыть резюме ===
         if data == "open_resumes":
             kb = await build_resume_keyboard(uid)
-            kb.add(types.InlineKeyboardButton("⬅️ В меню", callback_data="back_menu"))
+            kb.add(
+                types.InlineKeyboardButton(
+                    text="⬅️ В меню", callback_data="back_menu"
+                )
+            )
             await safe_edit_text(
                 call.message,
                 "📄 Ваши резюме:",
@@ -309,7 +312,13 @@ async def telegram_webhook(request: Request, token: str):
                 call.message,
                 summary,
                 types.InlineKeyboardMarkup(
-                    inline_keyboard=[[types.InlineKeyboardButton("⬅️ В меню", callback_data="back_menu")]]
+                    inline_keyboard=[
+                        [
+                            types.InlineKeyboardButton(
+                                text="⬅️ В меню", callback_data="back_menu"
+                            )
+                        ]
+                    ]
                 ),
                 html=True,
             )
