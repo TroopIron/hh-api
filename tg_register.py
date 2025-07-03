@@ -3,7 +3,6 @@ import logging
 from dotenv import load_dotenv
 
 import aiosqlite
-import time
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, types
 from aiogram.exceptions import TelegramBadRequest
@@ -144,8 +143,12 @@ async def safe_edit_markup(message: types.Message, markup: types.InlineKeyboardM
             raise
 
 
-async def safe_edit_text(message: types.Message, text: str,
-                         markup: types.InlineKeyboardMarkup | None):
+async def safe_edit_text(
+    message: types.Message,
+    text: str,
+    markup: types.InlineKeyboardMarkup | None,
+    md: bool = False,
+):
     """Безопасно обновить текст сообщения и клавиатуру."""
     try:
         await bot.edit_message_text(
@@ -153,6 +156,7 @@ async def safe_edit_text(message: types.Message, text: str,
             chat_id=message.chat.id,
             message_id=message.message_id,
             reply_markup=markup,
+            parse_mode="MarkdownV2" if md else None,
         )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -204,6 +208,7 @@ async def safe_edit_text_by_id(
     msg_id: int | None,
     text: str,
     markup: types.InlineKeyboardMarkup | None,
+    md: bool = False,
 ):
     """Редактирует сообщение по id, отправляя новое при ошибке."""
     if msg_id is None:
@@ -216,6 +221,7 @@ async def safe_edit_text_by_id(
             chat_id=uid,
             message_id=msg_id,
             reply_markup=markup,
+            parse_mode="MarkdownV2" if md else None,
         )
     except TelegramBadRequest as e:
         err = str(e).lower()
@@ -292,6 +298,7 @@ async def telegram_webhook(request: Request, token: str):
                         [types.InlineKeyboardButton("⬅️ Назад", callback_data="back_settings")]
                     ]
                 ),
+                md=True,
             )
             await bot.answer_callback_query(call.id)
             return {"ok": True}
