@@ -97,6 +97,31 @@ async def toggle_multi_value(user_id: int, key: str, value: str) -> set[str]:
     return items
 
 
+async def build_filters_summary(uid: int) -> str:
+    def fmt(val):
+        return val if val else "—"
+
+    region_id = await get_user_setting(uid, "region")
+    region = await hh_api.area_name(region_id) if region_id else "—"
+    salary = await get_user_setting(uid, "salary") or "—"
+    schedule = fmt(await get_user_setting(uid, "schedule"))
+    work_format = fmt(await get_user_setting(uid, "work_format"))
+    employment = fmt(await get_user_setting(uid, "employment_type"))
+    keyword = fmt(await get_user_setting(uid, "keyword"))
+    from aiogram.utils.text_decorations import escape_md
+
+    summary = (
+        "📋 *Ваши действующие фильтры*\n"
+        f"• Регион: {region}\n"
+        f"• ЗП ≥ {salary}\n"
+        f"• График: {schedule}\n"
+        f"• Формат работы: {work_format}\n"
+        f"• Тип занятости: {employment}\n"
+        f"• Ключевое слово: {keyword}"
+    )
+    return escape_md(summary)
+
+
 def build_oauth_url(tg_user: int) -> str:
     return (
         "https://hh.ru/oauth/authorize?response_type=code"
@@ -257,6 +282,20 @@ async def telegram_webhook(request: Request, token: str):
             await bot.answer_callback_query(call.id)
             return {"ok": True}
 
+        if data == "show_filters":
+            summary = await build_filters_summary(uid)
+            await safe_edit_text(
+                call.message,
+                summary,
+                types.InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [types.InlineKeyboardButton("⬅️ Назад", callback_data="back_settings")]
+                    ]
+                ),
+            )
+            await bot.answer_callback_query(call.id)
+            return {"ok": True}
+
         # ---------- запуск фильтров ----------
         if data.startswith("filter_"):
             fkey = data.split("_", 1)[1]
@@ -269,6 +308,11 @@ async def telegram_webhook(request: Request, token: str):
             if fkey == "salary":
                 await set_pending(uid, "salary")
                 await safe_edit_text(call.message, "Введите минимальную зарплату (число):", None)
+                return {"ok": True}
+
+            if fkey == "keyword":
+                await set_pending(uid, "keyword")
+                await safe_edit_text(call.message, "Введите ключевое слово:", None)
                 return {"ok": True}
 
             if fkey in MULTI_KEYS:
@@ -358,6 +402,15 @@ async def telegram_webhook(request: Request, token: str):
 
             if pending == "salary" and text.isdigit():
                 await save_user_setting(uid, "salary", text)
+                await set_pending(uid, None)
+                msg_id = await get_settings_msg_id(uid)
+                await safe_edit_text_by_id(
+                    uid, msg_id, "Ваши фильтры:", build_settings_keyboard()
+                )
+                return {"ok": True}
+
+            if pending == "keyword":
+                await save_user_setting(uid, "keyword", text)
                 await set_pending(uid, None)
                 msg_id = await get_settings_msg_id(uid)
                 await safe_edit_text_by_id(
