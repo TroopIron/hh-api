@@ -124,6 +124,68 @@ async def safe_edit_text(message: types.Message, text: str, markup: types.Inline
             raise
 
 
+async def get_settings_msg_id(uid: int) -> int | None:
+    """Возвращает сохранённый msg_id сообщения настроек."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            async with db.execute(
+                "SELECT settings_msg_id FROM users WHERE chat_id = ?",
+                (uid,),
+            ) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+        except aiosqlite.OperationalError as e:
+            if "no such column" in str(e).lower():
+                await db.execute(
+                    "ALTER TABLE users ADD COLUMN settings_msg_id INTEGER"
+                )
+                await db.commit()
+                return None
+            raise
+
+
+async def set_settings_msg_id(uid: int, msg_id: int) -> None:
+    """Сохраняет msg_id сообщения настроек."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "UPDATE users SET settings_msg_id = ? WHERE chat_id = ?",
+                (msg_id, uid),
+            )
+        except aiosqlite.OperationalError as e:
+            if "no such column" in str(e).lower():
+                await db.execute(
+                    "ALTER TABLE users ADD COLUMN settings_msg_id INTEGER"
+                )
+                await db.execute(
+                    "UPDATE users SET settings_msg_id = ? WHERE chat_id = ?",
+                    (msg_id, uid),
+                )
+        await db.commit()
+
+
+async def safe_edit_text_by_id(
+    uid: int,
+    msg_id: int | None,
+    text: str,
+    markup: types.InlineKeyboardMarkup | None,
+):
+    """Редактирует сообщение по id, отправляя новое при ошибке."""
+    if msg_id is None:
+        new_msg = await bot.send_message(uid, text, reply_markup=markup)
+        await set_settings_msg_id(uid, new_msg.message_id)
+        return
+    try:
+        await bot.edit_message_text(text, uid, msg_id, reply_markup=markup)
+    except TelegramBadRequest as e:
+        err = str(e).lower()
+        if "message to edit not found" in err:
+            new_msg = await bot.send_message(uid, text, reply_markup=markup)
+            await set_settings_msg_id(uid, new_msg.message_id)
+        elif "message is not modified" not in err:
+            raise
+
+
 async def safe_delete(message: types.Message) -> None:
     "Пытаемся удалить сообщение пользователя, не роняя обработчик."
     try:
@@ -170,8 +232,10 @@ async def telegram_webhook(request: Request, token: str):
             await db.commit()
 
         if data == "back_settings":
-            await safe_edit_text(
-                call.message,
+            smsg = await get_settings_msg_id(uid)
+            await safe_edit_text_by_id(
+                uid,
+                smsg,
                 "Ваши фильтры:",
                 build_settings_keyboard(),
             )
@@ -184,21 +248,21 @@ async def telegram_webhook(request: Request, token: str):
 
             if fkey == "region":
                 await set_pending(uid, "region")
-                await bot.send_message(uid, "Введите название региона:")
+                await safe_edit_text(call.message, "Введите название региона:", None)
                 return {"ok": True}
 
             if fkey == "salary":
                 await set_pending(uid, "salary")
-                await bot.send_message(uid, "Введите минимальную зарплату (число):")
+                await safe_edit_text(call.message, "Введите минимальную зарплату (число):", None)
                 return {"ok": True}
 
             if fkey in MULTI_KEYS:
                 selection = await get_user_setting(uid, fkey) or ""
                 sel_set = {i.strip() for i in selection.split(",") if i.strip()}
-                await bot.send_message(
-                    uid,
+                await safe_edit_text(
+                    call.message,
                     f"Выберите {fkey.replace('_', ' ')} (можно несколько):",
-                    reply_markup=build_inline_suggestions(
+                    build_inline_suggestions(
                         MULTI_KEYS[fkey], f"{fkey}_suggest", sel_set, with_back=True
                     ),
                 )
@@ -262,8 +326,29 @@ async def telegram_webhook(request: Request, token: str):
 
                 if text == "/settings":
                     await set_pending(uid, None)
-                    await bot.send_message(uid, "Ваши фильтры:", reply_markup=build_settings_keyboard())
+                    msg = await bot.send_message(
+                        uid, "Ваши фильтры:", reply_markup=build_settings_keyboard()
+                    )
+                    await set_settings_msg_id(uid, msg.message_id)
                     return {"ok": True}
+
+            if pending == "region":
+                await save_user_setting(uid, "region", text)
+                await set_pending(uid, None)
+                msg_id = await get_settings_msg_id(uid)
+                await safe_edit_text_by_id(
+                    uid, msg_id, "Ваши фильтры:", build_settings_keyboard()
+                )
+                return {"ok": True}
+
+            if pending == "salary" and text.isdigit():
+                await save_user_setting(uid, "salary", text)
+                await set_pending(uid, None)
+                msg_id = await get_settings_msg_id(uid)
+                await safe_edit_text_by_id(
+                    uid, msg_id, "Ваши фильтры:", build_settings_keyboard()
+                )
+                return {"ok": True}
         finally:
             if pending:
                 await safe_delete(msg)
